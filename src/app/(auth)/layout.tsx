@@ -20,7 +20,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         </div>
         <div className="relative space-y-4">
           <h1 className="text-3xl font-semibold leading-tight">
-            Gestão completa de atendimentos, em um só lugar.
+            Gestão completa de atendimentos em um só lugar.
           </h1>
           <p className="max-w-md text-primary-foreground/80">
             Pacientes, prontuários, agenda e financeiro organizados com a
