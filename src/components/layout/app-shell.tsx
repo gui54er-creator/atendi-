@@ -33,6 +33,50 @@ export function AppShell({ children, ...ctx }: AppShellProps) {
     if (stored) setCollapsed(stored === "true");
   }, []);
 
+  useEffect(() => {
+    const EDGE_ZONE = 24;
+    const THRESHOLD = 60;
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+
+    function onTouchStart(e: TouchEvent) {
+      const touch = e.touches[0];
+      if (!touch) return;
+      startX = touch.clientX;
+      startY = touch.clientY;
+      tracking = mobileOpen ? true : startX < EDGE_ZONE;
+    }
+
+    function onTouchMove(e: TouchEvent) {
+      if (!tracking) return;
+      const touch = e.touches[0];
+      if (!touch) return;
+      if (Math.abs(touch.clientY - startY) > Math.abs(touch.clientX - startX)) {
+        tracking = false;
+      }
+    }
+
+    function onTouchEnd(e: TouchEvent) {
+      if (!tracking) return;
+      tracking = false;
+      const touch = e.changedTouches[0];
+      if (!touch) return;
+      const dx = touch.clientX - startX;
+      if (!mobileOpen && dx > THRESHOLD) setMobileOpen(true);
+      if (mobileOpen && dx < -THRESHOLD) setMobileOpen(false);
+    }
+
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchmove", onTouchMove, { passive: true });
+    document.addEventListener("touchend", onTouchEnd, { passive: true });
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchmove", onTouchMove);
+      document.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [mobileOpen]);
+
   function toggleCollapse() {
     setCollapsed((prev) => {
       localStorage.setItem("atendi:sidebar-collapsed", String(!prev));
