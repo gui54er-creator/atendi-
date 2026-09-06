@@ -1,0 +1,653 @@
+// Atendi+ — schema de banco de dados
+// Multi-tenant: toda entidade sensível carrega companyId e nunca deve ser
+// consultada sem passar pelo helper de autorização em lib/auth/tenant.ts
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identidade e multi-tenant
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  phone        String?
+  passwordHash String
+  avatarUrl    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  memberships                  CompanyMember[]
+  appointments                 Appointment[]        @relation("AppointmentProfessional")
+  appointmentSeries            AppointmentSeries[]  @relation("SeriesProfessional")
+  appointmentNotes             AppointmentNote[]
+  patientFiles                 PatientFile[]
+  transactions                 Transaction[]
+  notifications                Notification[]
+  auditLogs                    AuditLog[]
+  patientsCreated              Patient[]
+  passwordResets               PasswordResetToken[]
+  sessions                     Session[]
+  patientWorkplacesResponsible PatientWorkplace[]   @relation("PatientWorkplaceProfessional")
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("password_reset_tokens")
+}
+
+model Company {
+  id           String  @id @default(cuid())
+  name         String
+  tradeName    String?
+  taxId        String? // CPF ou CNPJ
+  phone        String?
+  whatsapp     String?
+  email        String?
+  cep          String?
+  address      String?
+  number       String?
+  complement   String?
+  neighborhood String?
+  city         String?
+  state        String?
+  logoUrl      String?
+
+  // Configurações de agenda
+  timezone               String @default("America/Sao_Paulo")
+  agendaStartTime        String @default("08:00")
+  agendaEndTime          String @default("19:00")
+  defaultDurationMinutes Int    @default(60)
+  workingDays            Int[]  @default([1, 2, 3, 4, 5])
+
+  // Configurações financeiras
+  currency                    String  @default("BRL")
+  receptionistFinancialAccess Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  members           CompanyMember[]
+  patients          Patient[]
+  customFields      CustomField[]
+  appointments      Appointment[]
+  appointmentSeries AppointmentSeries[]
+  patientFiles      PatientFile[]
+  transactions      Transaction[]
+  expenseCategories ExpenseCategory[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  workplaces        Workplace[]
+
+  @@map("companies")
+}
+
+// ---------------------------------------------------------------------------
+// Locais de trabalho
+// ---------------------------------------------------------------------------
+
+// Um "espaço" dentro da mesma empresa/conta onde o profissional atende
+// (ex: clínica, consultório particular, atendimento online). O local
+// selecionado funciona como o contexto ativo do sistema — veja
+// lib/auth/session.ts (getWorkplaceContext) e o cookie ACTIVE_WORKPLACE_COOKIE.
+model Workplace {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name         String
+  type         String?
+  color        String  @default("#6366F1")
+  cep          String?
+  address      String?
+  number       String?
+  complement   String?
+  neighborhood String?
+  city         String?
+  state        String?
+  phone        String?
+  notes        String?
+  isDefault    Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  patientLinks      PatientWorkplace[]
+  appointments      Appointment[]
+  appointmentSeries AppointmentSeries[]
+  transactions      Transaction[]
+  files             PatientFile[]
+
+  @@index([companyId])
+  @@map("workplaces")
+}
+
+// Vínculo N:N entre Patient (identidade compartilhada) e Workplace (onde é
+// atendido). Dados básicos do paciente ficam em Patient; dados da relação
+// com aquele local específico (status, prontuário, campos personalizados)
+// ficam pendurados aqui.
+model PatientWorkplace {
+  id          String    @id @default(cuid())
+  patientId   String
+  patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  workplaceId String
+  workplace   Workplace @relation(fields: [workplaceId], references: [id], onDelete: Cascade)
+
+  status     PatientStatus @default(ACTIVE)
+  joinedAt   DateTime      @default(now())
+  howFoundUs String?
+  notes      String?
+
+  defaultProfessionalId String?
+  defaultProfessional   User?   @relation("PatientWorkplaceProfessional", fields: [defaultProfessionalId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  record            PatientRecord?
+  customFieldValues CustomFieldValue[]
+
+  @@unique([patientId, workplaceId])
+  @@index([workplaceId])
+  @@map("patient_workplaces")
+}
+
+enum CompanyRole {
+  OWNER
+  ADMIN
+  PROFESSIONAL
+  RECEPTIONIST
+}
+
+enum MemberStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+model CompanyMember {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String
+  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  role      CompanyRole  @default(PROFESSIONAL)
+  status    MemberStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@unique([userId, companyId])
+  @@map("company_members")
+}
+
+// ---------------------------------------------------------------------------
+// Pacientes
+// ---------------------------------------------------------------------------
+
+enum Sex {
+  MALE
+  FEMALE
+  INTERSEX
+  NOT_INFORMED
+}
+
+enum PatientStatus {
+  ACTIVE
+  INACTIVE
+  IN_PROGRESS
+  DISCHARGED
+}
+
+model Patient {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  photoUrl      String?
+  fullName      String
+  socialName    String?
+  cpf           String?
+  rg            String?
+  birthDate     DateTime?
+  sex           Sex       @default(NOT_INFORMED)
+  gender        String?
+  maritalStatus String?
+  profession    String?
+  education     String?
+  nationality   String?   @default("Brasileira")
+
+  phone    String?
+  whatsapp String?
+  email    String?
+
+  cep          String?
+  address      String?
+  number       String?
+  complement   String?
+  neighborhood String?
+  city         String?
+  state        String?
+
+  generalNotes String?
+
+  createdById String?
+  createdBy   User?     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  guardians         Guardian[]
+  appointments      Appointment[]
+  appointmentSeries AppointmentSeries[]
+  files             PatientFile[]
+  transactions      Transaction[]
+  workplaces        PatientWorkplace[]
+
+  @@index([companyId])
+  @@index([companyId, fullName])
+  @@map("patients")
+}
+
+model Guardian {
+  id        String  @id @default(cuid())
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  fullName     String
+  relationship String
+  cpf          String?
+  phone        String?
+  whatsapp     String?
+  email        String?
+
+  cep          String?
+  address      String?
+  number       String?
+  complement   String?
+  neighborhood String?
+  city         String?
+  state        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("guardians")
+}
+
+model PatientRecord {
+  id String @id @default(cuid())
+
+  // Prontuário pertence ao vínculo paciente↔local: o mesmo paciente pode
+  // ter prontuários diferentes em locais diferentes (ver PatientWorkplace).
+  patientWorkplaceId String           @unique
+  patientWorkplace   PatientWorkplace @relation(fields: [patientWorkplaceId], references: [id], onDelete: Cascade)
+
+  mainComplaint      String?
+  reasonForVisit     String?
+  history            String?
+  pastHistory        String?
+  medications        String?
+  allergies          String?
+  previousTreatments String?
+  importantNotes     String?
+  goals              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("patient_records")
+}
+
+enum CustomFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  BOOLEAN
+  SELECT
+}
+
+model CustomField {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  label    String
+  type     CustomFieldType
+  options  Json? // lista de opções para SELECT
+  required Boolean         @default(false)
+  order    Int             @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  values CustomFieldValue[]
+
+  @@index([companyId])
+  @@map("custom_fields")
+}
+
+model CustomFieldValue {
+  id            String      @id @default(cuid())
+  customFieldId String
+  customField   CustomField @relation(fields: [customFieldId], references: [id], onDelete: Cascade)
+  value         String?
+
+  // Valor pertence ao vínculo paciente↔local, assim como o prontuário.
+  patientWorkplaceId String
+  patientWorkplace   PatientWorkplace @relation(fields: [patientWorkplaceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([customFieldId, patientWorkplaceId])
+  @@map("custom_field_values")
+}
+
+// ---------------------------------------------------------------------------
+// Agenda / atendimentos
+// ---------------------------------------------------------------------------
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELED
+  NO_SHOW
+}
+
+enum RecurrenceFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+// Guarda a "regra" de recorrência. As ocorrências reais são materializadas
+// como registros Appointment vinculados via seriesId, dentro de uma janela
+// rolante (ver lib/scheduling/recurrence.ts).
+model AppointmentSeries {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  workplaceId String
+  workplace   Workplace @relation(fields: [workplaceId], references: [id], onDelete: Cascade)
+
+  professionalId String
+  professional   User   @relation("SeriesProfessional", fields: [professionalId], references: [id])
+
+  frequency       RecurrenceFrequency
+  interval        Int                 @default(1) // usado quando CUSTOM (a cada N semanas)
+  daysOfWeek      Int[] // 0=domingo ... 6=sábado
+  startTime       String // "HH:mm"
+  durationMinutes Int
+  type            String
+  value           Decimal?            @db.Decimal(10, 2)
+  notes           String?
+
+  startDate  DateTime
+  endDate    DateTime?
+  indefinite Boolean   @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  appointments Appointment[]
+
+  @@index([companyId])
+  @@map("appointment_series")
+}
+
+model Appointment {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  workplaceId String
+  workplace   Workplace @relation(fields: [workplaceId], references: [id], onDelete: Cascade)
+
+  professionalId String
+  professional   User   @relation("AppointmentProfessional", fields: [professionalId], references: [id])
+
+  seriesId String?
+  series   AppointmentSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+
+  startsAt DateTime
+  endsAt   DateTime
+  type     String
+  value    Decimal?          @db.Decimal(10, 2)
+  notes    String?
+  status   AppointmentStatus @default(SCHEDULED)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  appointmentNotes AppointmentNote[]
+  files            PatientFile[]
+  transactions     Transaction[]
+
+  @@index([companyId, startsAt])
+  @@index([professionalId, startsAt])
+  @@index([patientId])
+  @@map("appointments")
+}
+
+model AppointmentNote {
+  id            String      @id @default(cuid())
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  authorId      String
+  author        User        @relation(fields: [authorId], references: [id])
+
+  content String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("appointment_notes")
+}
+
+// ---------------------------------------------------------------------------
+// Arquivos
+// ---------------------------------------------------------------------------
+
+model PatientFile {
+  id            String       @id @default(cuid())
+  companyId     String
+  company       Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  patientId     String
+  patient       Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  workplaceId String
+  workplace   Workplace @relation(fields: [workplaceId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   User   @relation(fields: [uploadedById], references: [id])
+
+  storageKey  String // caminho interno não previsível (uuid), nunca exposto diretamente
+  filename    String
+  mimeType    String
+  size        Int
+  description String?
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([companyId, patientId])
+  @@map("patient_files")
+}
+
+// ---------------------------------------------------------------------------
+// Financeiro
+// ---------------------------------------------------------------------------
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum TransactionStatus {
+  PAID
+  PENDING
+  CANCELED
+}
+
+enum PaymentMethod {
+  PIX
+  CASH
+  CREDIT_CARD
+  DEBIT_CARD
+  BANK_TRANSFER
+  OTHER
+}
+
+model ExpenseCategory {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name      String
+  type      TransactionType
+  isDefault Boolean         @default(false)
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  transactions Transaction[]
+
+  @@index([companyId])
+  @@map("expense_categories")
+}
+
+model Transaction {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Despesas gerais da empresa (sem paciente/atendimento) também pertencem
+  // a um local — todo lançamento financeiro tem um contexto de local.
+  workplaceId String
+  workplace   Workplace @relation(fields: [workplaceId], references: [id], onDelete: Cascade)
+
+  type          TransactionType
+  description   String
+  amount        Decimal           @db.Decimal(10, 2)
+  date          DateTime
+  status        TransactionStatus @default(PENDING)
+  paymentMethod PaymentMethod?
+  isRecurring   Boolean           @default(false)
+  notes         String?
+
+  categoryId String?
+  category   ExpenseCategory? @relation(fields: [categoryId], references: [id])
+
+  patientId String?
+  patient   Patient? @relation(fields: [patientId], references: [id])
+
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([companyId, date])
+  @@index([companyId, type, status])
+  @@map("transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Notificações e auditoria
+// ---------------------------------------------------------------------------
+
+enum NotificationType {
+  APPOINTMENT_TODAY
+  APPOINTMENT_REMINDER
+  PAYMENT_PENDING
+  NEW_PATIENT
+  GENERIC
+}
+
+// Estruturado para futura entrega multi-canal (in-app hoje; e-mail/WhatsApp/SMS
+// mais tarde) — ver channel em lib/notifications/dispatch.ts
+model Notification {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  title   String
+  message String
+  link    String?
+  read    Boolean          @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+
+  action     String // ex: "patient.created", "appointment.updated"
+  entityType String
+  entityId   String
+  metadata   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}

@@ -1,0 +1,87 @@
+/* Sobrescrita visual do react-big-calendar para casar com o design do Atendi+ */
+
+.atendi-calendar {
+  font-family: inherit;
+  background: transparent;
+}
+
+.atendi-calendar .rbc-toolbar {
+  display: none; /* usamos nossa própria toolbar */
+}
+
+.atendi-calendar .rbc-month-view,
+.atendi-calendar .rbc-time-view {
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: hsl(var(--card));
+}
+
+.atendi-calendar .rbc-header {
+  padding: 10px 4px;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: hsl(var(--muted-foreground));
+  border-bottom: 1px solid hsl(var(--border));
+  border-left: 1px solid hsl(var(--border));
+}
+
+.atendi-calendar .rbc-header:first-child {
+  border-left: none;
+}
+
+.atendi-calendar .rbc-today {
+  background-color: hsl(var(--primary) / 0.06);
+}
+
+.atendi-calendar .rbc-off-range-bg {
+  background: hsl(var(--muted) / 0.4);
+}
+
+.atendi-calendar .rbc-time-content,
+.atendi-calendar .rbc-time-header-content,
+.atendi-calendar .rbc-month-row,
+.atendi-calendar .rbc-day-bg + .rbc-day-bg,
+.atendi-calendar .rbc-time-content > * + * > * {
+  border-color: hsl(var(--border));
+}
+
+.atendi-calendar .rbc-timeslot-group {
+  border-bottom: 1px solid hsl(var(--border) / 0.6);
+}
+
+.atendi-calendar .rbc-time-slot {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.7rem;
+}
+
+.atendi-calendar .rbc-current-time-indicator {
+  background-color: hsl(var(--destructive));
+  height: 2px;
+}
+
+.atendi-calendar .rbc-event {
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  padding: 2px 6px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+
+.atendi-calendar .rbc-event:focus {
+  outline: 2px solid hsl(var(--ring));
+}
+
+.atendi-calendar .rbc-slot-selection {
+  background-color: hsl(var(--primary) / 0.15);
+}
+
+.atendi-calendar .rbc-show-more {
+  color: hsl(var(--primary));
+  font-weight: 500;
+}
+
+.atendi-calendar .rbc-day-slot .rbc-events-container {
+  margin-right: 4px;
+}
