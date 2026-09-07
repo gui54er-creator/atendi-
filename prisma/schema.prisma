@@ -177,6 +177,7 @@ model PatientWorkplace {
 
   record            PatientRecord?
   customFieldValues CustomFieldValue[]
+  recordTopics      PatientRecordTopic[]
 
   @@unique([patientId, workplaceId])
   @@index([workplaceId])
@@ -327,6 +328,27 @@ model PatientRecord {
   updatedAt DateTime @updatedAt
 
   @@map("patient_records")
+}
+
+// Tópicos personalizados de prontuário (Anamnese, Evolução, Observações...).
+// Estrutura adicional e independente do PatientRecord acima — não substitui
+// nem migra os campos fixos existentes, apenas complementa o prontuário.
+model PatientRecordTopic {
+  id String @id @default(cuid())
+
+  // Mesmo escopo do PatientRecord: por vínculo paciente↔local de trabalho.
+  patientWorkplaceId String
+  patientWorkplace   PatientWorkplace @relation(fields: [patientWorkplaceId], references: [id], onDelete: Cascade)
+
+  title   String
+  content String?
+  order   Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientWorkplaceId, order])
+  @@map("patient_record_topics")
 }
 
 enum CustomFieldType {

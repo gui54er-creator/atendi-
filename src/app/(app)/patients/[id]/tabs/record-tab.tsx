@@ -3,13 +3,14 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Printer, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 import { CustomFieldInput, type CustomFieldDef } from "@/components/forms/custom-field-input";
+import { RecordTopics } from "./record-topics";
 
 const RECORD_FIELDS: { name: string; label: string }[] = [
   { name: "mainComplaint", label: "Queixa principal" },
@@ -73,7 +74,16 @@ export function RecordTab({
   }
 
   return (
-    <Form {...form}>
+    <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" asChild>
+          <a href={`/patients/${patientId}/record/print?workplace=${activeLink.workplaceId}`} target="_blank" rel="noopener noreferrer">
+            <Printer className="h-4 w-4" /> Imprimir prontuário
+          </a>
+        </Button>
+      </div>
+
+      <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
         <Card>
           <CardHeader>
@@ -123,6 +133,11 @@ export function RecordTab({
           </Button>
         </div>
       </form>
-    </Form>
+      </Form>
+
+      <Separator />
+
+      <RecordTopics patientId={patientId} workplaceId={activeLink.workplaceId} />
+    </div>
   );
 }
