@@ -1,4 +1,6 @@
 import "server-only";
+import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   S3Client,
@@ -10,13 +12,30 @@ import {
 // Arquivos de pacientes (fotos/documentos) NUNCA são públicos — são servidos
 // por uma rota autenticada que valida a empresa/paciente antes de devolver os
 // bytes (ver /api/files/[id]). Logos e avatares, por serem ativos de marca
-// não sensíveis, vão para o prefixo "public/" do bucket, que é exposto via
-// R2_PUBLIC_URL (domínio público do bucket ou domínio customizado).
+// não sensíveis, vão para o prefixo "public/" do bucket.
 //
-// Tudo fica no mesmo bucket Cloudflare R2 (S3-compatível) em vez de disco
-// local, para que o mesmo conteúdo esteja disponível de qualquer dispositivo.
+// Armazenamento em nuvem (Cloudflare R2) é usado quando as variáveis R2_*
+// estão configuradas; caso contrário cai para disco local, apenas para não
+// bloquear o build/deploy enquanto o R2 não é configurado. O fallback em
+// disco NÃO funciona de forma confiável em produção na Netlify (funções
+// serverless têm sistema de arquivos somente leitura fora de /tmp, e não
+// compartilham nada entre invocações) — é só um modo degradado temporário.
+// Configure R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+// R2_BUCKET_NAME e R2_PUBLIC_URL para reativar o armazenamento em nuvem.
 const PRIVATE_PREFIX = "private";
 const PUBLIC_PREFIX = "public";
+
+const PRIVATE_ROOT = path.join(process.cwd(), "storage", "uploads");
+const PUBLIC_ROOT = path.join(process.cwd(), "public", "uploads");
+
+function isR2Configured(): boolean {
+  return Boolean(
+    process.env.R2_ACCOUNT_ID &&
+      process.env.R2_ACCESS_KEY_ID &&
+      process.env.R2_SECRET_ACCESS_KEY &&
+      process.env.R2_BUCKET_NAME
+  );
+}
 
 function getEnv(name: string): string {
   const value = process.env[name];
@@ -70,7 +89,7 @@ function assertSafeMime(mimeType: string, allowed: readonly string[]) {
   }
 }
 
-/** Salva um arquivo privado no bucket, sob uma chave (nome) não previsível. */
+/** Salva um arquivo privado (R2 se configurado, senão disco local), sob uma chave não previsível. */
 export async function savePrivateFile(
   buffer: Buffer,
   mimeType: string,
@@ -85,48 +104,69 @@ export async function savePrivateFile(
   const filename = `${randomUUID()}.${ext}`;
   const storageKey = [scopeDir, filename].join("/");
 
-  await getClient().send(
-    new PutObjectCommand({
-      Bucket: getBucket(),
-      Key: `${PRIVATE_PREFIX}/${storageKey}`,
-      Body: buffer,
-      ContentType: mimeType,
-    })
-  );
+  if (isR2Configured()) {
+    await getClient().send(
+      new PutObjectCommand({
+        Bucket: getBucket(),
+        Key: `${PRIVATE_PREFIX}/${storageKey}`,
+        Body: buffer,
+        ContentType: mimeType,
+      })
+    );
+  } else {
+    const dir = path.join(PRIVATE_ROOT, scopeDir);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, filename), buffer);
+  }
 
   return { storageKey };
 }
 
 export async function readPrivateFile(storageKey: string): Promise<Buffer> {
-  const response = await getClient().send(
-    new GetObjectCommand({
-      Bucket: getBucket(),
-      Key: `${PRIVATE_PREFIX}/${storageKey}`,
-    })
-  );
-
-  const body = response.Body;
-  if (!body) throw new Error("Arquivo não encontrado no armazenamento.");
-
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of body as AsyncIterable<Uint8Array>) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
-export async function deletePrivateFile(storageKey: string): Promise<void> {
-  await getClient()
-    .send(
-      new DeleteObjectCommand({
+  if (isR2Configured()) {
+    const response = await getClient().send(
+      new GetObjectCommand({
         Bucket: getBucket(),
         Key: `${PRIVATE_PREFIX}/${storageKey}`,
       })
-    )
-    .catch(() => undefined);
+    );
+
+    const body = response.Body;
+    if (!body) throw new Error("Arquivo não encontrado no armazenamento.");
+
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+
+  const resolved = path.join(PRIVATE_ROOT, storageKey);
+  if (!resolved.startsWith(PRIVATE_ROOT)) {
+    throw new Error("Caminho de arquivo inválido.");
+  }
+  return readFile(resolved);
 }
 
-/** Logos/avatares: ativos não sensíveis, expostos via URL pública do bucket. */
+export async function deletePrivateFile(storageKey: string): Promise<void> {
+  if (isR2Configured()) {
+    await getClient()
+      .send(
+        new DeleteObjectCommand({
+          Bucket: getBucket(),
+          Key: `${PRIVATE_PREFIX}/${storageKey}`,
+        })
+      )
+      .catch(() => undefined);
+    return;
+  }
+
+  const resolved = path.join(PRIVATE_ROOT, storageKey);
+  if (!resolved.startsWith(PRIVATE_ROOT)) return;
+  await unlink(resolved).catch(() => undefined);
+}
+
+/** Logos/avatares: ativos não sensíveis (R2 se configurado, senão /public local). */
 export async function savePublicImage(
   buffer: Buffer,
   mimeType: string,
@@ -139,17 +179,25 @@ export async function savePublicImage(
 
   const ext = EXTENSION_BY_MIME[mimeType] ?? "bin";
   const filename = `${randomUUID()}.${ext}`;
-  const key = `${PUBLIC_PREFIX}/${scopeDir}/${filename}`;
 
-  await getClient().send(
-    new PutObjectCommand({
-      Bucket: getBucket(),
-      Key: key,
-      Body: buffer,
-      ContentType: mimeType,
-    })
-  );
+  if (isR2Configured()) {
+    const key = `${PUBLIC_PREFIX}/${scopeDir}/${filename}`;
+    await getClient().send(
+      new PutObjectCommand({
+        Bucket: getBucket(),
+        Key: key,
+        Body: buffer,
+        ContentType: mimeType,
+      })
+    );
 
-  const publicUrl = getEnv("R2_PUBLIC_URL").replace(/\/$/, "");
-  return { url: `${publicUrl}/${key}` };
+    const publicUrl = getEnv("R2_PUBLIC_URL").replace(/\/$/, "");
+    return { url: `${publicUrl}/${key}` };
+  }
+
+  const dir = path.join(PUBLIC_ROOT, scopeDir);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, filename), buffer);
+
+  return { url: `/uploads/${scopeDir}/${filename}` };
 }
