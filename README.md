@@ -43,9 +43,12 @@ voltado a profissionais e empresas que realizam atendimentos individuais
   financeiro...) com usuário, data/hora e o registro afetado. Visível em
   Configurações → Auditoria (Proprietário/Admin).
 - **Arquivos de pacientes**: nunca ficam em `/public`. São salvos fora da
-  pasta pública, sob um nome não previsível (UUID), e só são servidos por
+  pasta pública, sob uma chave não previsível, e só são servidos por
   `/api/files/[id]`, que valida sessão + empresa + permissão antes de
-  devolver os bytes.
+  devolver os bytes. Fisicamente ficam no Cloudflare R2 (se configurado) ou
+  na tabela `FileBlob` do próprio Postgres/Neon (fallback padrão — ver
+  `src/lib/storage.ts`), nunca em disco local, para persistir e sincronizar
+  entre dispositivos mesmo em produção na Netlify.
 
 ## Estrutura do projeto
 
@@ -192,13 +195,15 @@ que falta para produção:
   nesta versão.
 - **Armazenamento de arquivos**: `src/lib/storage.ts` usa um bucket
   Cloudflare R2 (S3-compatível) quando as variáveis `R2_*` estão
-  configuradas. **Elas estão desativadas/comentadas por padrão no momento**
-  — sem elas, o app cai para disco local automaticamente, só para não
-  travar o build/deploy. Esse fallback em disco não é confiável em produção
-  na Netlify (funções serverless têm sistema de arquivos somente leitura
-  fora de `/tmp`), então uploads de logo/arquivos de paciente podem falhar
-  ou não persistir até o R2 ser configurado — o resto do app funciona
-  normalmente. Veja "Publicando na Netlify" abaixo.
+  configuradas. **Elas são opcionais e estão desativadas por padrão** — sem
+  elas, o app grava os bytes na tabela `FileBlob` do próprio Postgres/Neon,
+  que já é compartilhado entre dispositivos e sobrevive normalmente ao
+  ambiente serverless da Netlify (diferente do antigo fallback em disco
+  local, que foi removido por não persistir em produção). Arquivos pequenos
+  (fotos/PDFs, limitados por `MAX_UPLOAD_SIZE_MB`) cabem bem nesse modelo;
+  configure o R2 quando o volume de uploads justificar um object storage
+  dedicado — os arquivos já salvos no Postgres continuam funcionando
+  normalmente depois da migração.
 
 ## Mesmos dados no PC e no celular (nuvem)
 
@@ -209,14 +214,16 @@ banco de dados e o armazenamento de arquivos precisam estar na nuvem:
    [Neon](https://neon.tech), copie a connection string e coloque em
    `DATABASE_URL`. Rode `npx prisma migrate deploy` uma vez para criar as
    tabelas nesse banco.
-2. **Armazenamento de arquivos** (opcional por enquanto): crie um bucket no
+2. **Armazenamento de arquivos** (opcional): sem nenhuma configuração
+   adicional, fotos e documentos já ficam salvos no Postgres/Neon e
+   aparecem em qualquer dispositivo (ver seção acima). Para usar um object
+   storage dedicado, crie um bucket no
    [Cloudflare R2](https://dash.cloudflare.com) (grátis até 10GB), gere um
    token de API com acesso de leitura/escrita e preencha `R2_ACCOUNT_ID`,
    `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` e `R2_BUCKET_NAME`. Ative
    "Public Access" no bucket para obter a `R2_PUBLIC_URL` (usada só para
    logos/avatares — arquivos de pacientes continuam privados, servidos por
-   rota autenticada). Enquanto essas variáveis não existirem, uploads usam
-   o fallback em disco local (ver seção acima).
+   rota autenticada).
 
 ## Publicando na Netlify
 
@@ -231,18 +238,20 @@ suporte a SSR, API routes e tudo que o Next.js 14 usa aqui — não precisa de
 2. Em **Site settings > Environment variables**, cadastre no mínimo
    `DATABASE_URL` (a connection string do Neon), `NEXTAUTH_SECRET`,
    `NEXTAUTH_URL` e `MAX_UPLOAD_SIZE_MB`. As variáveis `R2_*` são
-   opcionais por enquanto — sem elas o app builda e funciona normalmente,
-   só com uploads em modo degradado (ver seção acima); adicione-as depois
-   para reativar o armazenamento em nuvem.
+   opcionais — sem elas o app builda e funciona normalmente, incluindo
+   upload de fotos/documentos (armazenados no Postgres — ver seção acima);
+   adicione-as depois para migrar para um object storage dedicado.
 3. `NEXTAUTH_URL` precisa ser a URL final do site na Netlify (ex:
    `https://atendiplus.netlify.app` ou o domínio customizado), sem barra no
    final. Se você não sabe a URL antes do primeiro deploy, faça um deploy
    inicial, copie a URL gerada, cadastre `NEXTAUTH_URL` com ela e dispare
    um novo deploy (**Deploys > Trigger deploy**) para a variável valer.
-4. Rode as migrations contra o banco Neon **antes** (ou logo depois) do
-   primeiro deploy, a partir da sua máquina: aponte `DATABASE_URL` no seu
-   `.env` local para o Neon e rode `npx prisma migrate deploy`. A Netlify
-   não roda migrations sozinha no build.
+4. O comando de build (`prisma generate && prisma migrate deploy && next
+   build`, já configurado em `package.json`) roda as migrations pendentes
+   contra o banco apontado por `DATABASE_URL` automaticamente a cada
+   deploy — não é preciso rodar `prisma migrate deploy` manualmente. Ele só
+   aplica migrations novas (nunca apaga dados existentes), então é seguro
+   rodar a cada deploy.
 
 Depois disso, o app fica acessível por uma URL pública — abre igual no PC e
 no celular, de qualquer rede, sem precisar do PC ligado.

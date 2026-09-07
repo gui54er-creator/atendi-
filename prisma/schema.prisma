@@ -491,6 +491,22 @@ model AppointmentNote {
 // Arquivos
 // ---------------------------------------------------------------------------
 
+// Conteúdo binário de um upload (foto/documento/logo), usado como fallback
+// enquanto o Cloudflare R2 não está configurado (ver isR2Configured() em
+// lib/storage.ts). Guardar o arquivo aqui — em vez de em disco local — é o
+// que garante sincronização entre dispositivos em produção na Netlify, cujas
+// funções serverless têm sistema de arquivos efêmero. Quando R2 for
+// configurado, novos uploads passam a ir para lá automaticamente; os que já
+// estão aqui continuam servidos normalmente por esta tabela.
+model FileBlob {
+  id        String   @id @default(cuid())
+  mimeType  String
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  @@map("file_blobs")
+}
+
 model PatientFile {
   id            String       @id @default(cuid())
   companyId     String
