@@ -99,11 +99,14 @@ cp .env.example .env
 
 | Variável | Descrição |
 |---|---|
-| `DATABASE_URL` | String de conexão do PostgreSQL |
+| `DATABASE_URL` | String de conexão do PostgreSQL (recomendado: um projeto grátis no [Neon](https://neon.tech), para os dados ficarem na nuvem) |
 | `NEXTAUTH_SECRET` | Valor aleatório (`openssl rand -base64 32`) usado para assinar sessões |
 | `NEXTAUTH_URL` | URL base da aplicação (`http://localhost:3000` em dev) |
-| `UPLOADS_DIR` | Diretório de uploads públicos (logos/avatares) |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` | Credenciais do bucket [Cloudflare R2](https://dash.cloudflare.com) usado para armazenar uploads |
+| `R2_PUBLIC_URL` | URL pública do bucket R2, usada apenas para logos/avatares |
 | `MAX_UPLOAD_SIZE_MB` | Tamanho máximo de upload, em MB |
+
+Veja [Rodando com os mesmos dados no PC e no celular](#rodando-com-os-mesmos-dados-no-pc-e-no-celular) para o passo a passo de criar o banco e o bucket.
 
 ### 4. Rodar as migrations
 
@@ -187,10 +190,56 @@ que falta para produção:
   suporta essa extensão (bastaria um campo de profissional responsável em
   `Patient` e um filtro adicional nas queries), mas não foi implementada
   nesta versão.
-- **Armazenamento de arquivos**: uploads ficam no disco local
-  (`storage/uploads` e `public/uploads`). Funciona bem para desenvolvimento e
-  demonstração; para produção o recomendado é trocar por um bucket
-  S3-compatível (a troca fica isolada em `src/lib/storage.ts`).
+- **Armazenamento de arquivos**: uploads vão para um bucket Cloudflare R2
+  (S3-compatível), via `src/lib/storage.ts`. Isso é o que permite abrir o
+  app em qualquer dispositivo (PC, celular) e ver os mesmos arquivos —
+  nada fica preso ao disco de uma máquina específica.
+
+## Mesmos dados no PC e no celular (nuvem)
+
+O banco de dados e o armazenamento de arquivos já ficam na nuvem (Neon +
+Cloudflare R2), não em disco local — isso é o que garante que PC e celular
+sempre veem os mesmos pacientes, agenda e arquivos:
+
+1. **Banco de dados**: crie um projeto Postgres gratuito em
+   [Neon](https://neon.tech), copie a connection string e coloque em
+   `DATABASE_URL`. Rode `npx prisma migrate deploy` uma vez para criar as
+   tabelas nesse banco.
+2. **Armazenamento de arquivos**: crie um bucket no
+   [Cloudflare R2](https://dash.cloudflare.com) (grátis até 10GB), gere um
+   token de API com acesso de leitura/escrita e preencha `R2_ACCOUNT_ID`,
+   `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` e `R2_BUCKET_NAME`. Ative
+   "Public Access" no bucket para obter a `R2_PUBLIC_URL` (usada só para
+   logos/avatares — arquivos de pacientes continuam privados, servidos por
+   rota autenticada).
+
+## Publicando na Netlify
+
+O repositório já tem `netlify.toml` configurado com o
+[`@netlify/plugin-nextjs`](https://github.com/netlify/next-runtime), que dá
+suporte a SSR, API routes e tudo que o Next.js 14 usa aqui — não precisa de
+`output: "export"` nem de nenhuma mudança no código.
+
+1. No painel da Netlify: **Add new site > Import an existing project**,
+   conecte este repositório Git. Build command e publish directory já vêm
+   do `netlify.toml` — não precisa preencher nada manualmente.
+2. Em **Site settings > Environment variables**, cadastre todas as
+   variáveis do `.env.example`: `DATABASE_URL` (a connection string do
+   Neon), `NEXTAUTH_SECRET`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+   `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` e
+   `MAX_UPLOAD_SIZE_MB`.
+3. `NEXTAUTH_URL` precisa ser a URL final do site na Netlify (ex:
+   `https://atendiplus.netlify.app` ou o domínio customizado), sem barra no
+   final. Se você não sabe a URL antes do primeiro deploy, faça um deploy
+   inicial, copie a URL gerada, cadastre `NEXTAUTH_URL` com ela e dispare
+   um novo deploy (**Deploys > Trigger deploy**) para a variável valer.
+4. Rode as migrations contra o banco Neon **antes** (ou logo depois) do
+   primeiro deploy, a partir da sua máquina: aponte `DATABASE_URL` no seu
+   `.env` local para o Neon e rode `npx prisma migrate deploy`. A Netlify
+   não roda migrations sozinha no build.
+
+Depois disso, o app fica acessível por uma URL pública — abre igual no PC e
+no celular, de qualquer rede, sem precisar do PC ligado.
 
 ## Segurança e LGPD
 
