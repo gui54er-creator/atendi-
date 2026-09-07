@@ -7,9 +7,11 @@ import {
   addMonths,
   addWeeks,
   addDays,
+  endOfDay,
   endOfMonth,
   endOfWeek,
   format,
+  startOfDay,
   startOfMonth,
   startOfWeek,
   subMonths,
@@ -46,7 +48,7 @@ interface AppointmentEvent {
 
 function getRange(date: Date, view: View) {
   if (view === Views.MONTH) return { start: startOfMonth(date), end: endOfMonth(date) };
-  if (view === Views.DAY) return { start: date, end: date };
+  if (view === Views.DAY) return { start: startOfDay(date), end: endOfDay(date) };
   return { start: startOfWeek(date, { weekStartsOn: 0 }), end: endOfWeek(date, { weekStartsOn: 0 }) };
 }
 
